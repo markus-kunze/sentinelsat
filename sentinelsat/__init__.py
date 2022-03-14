@@ -24,4 +24,6 @@ from .download import (
     Downloader,
     DownloadStatus,
 )
+from .cscgs import LtaAPI
+from .cscgs_downloader import LtaDownloader
 from .products import all_nodes_filter, make_path_filter, make_size_filter, SentinelProductsAPI
