@@ -1,10 +1,9 @@
 import json
 from copy import copy
-from datetime import date, datetime, timedelta
-from urllib.parse import quote_plus, urljoin
+from urllib.parse import urljoin
 import requests
 import time
-from typing import Any, Dict
+import logging
 from collections import namedtuple
 import requests.utils
 
@@ -14,18 +13,12 @@ from sentinelsat.download import DownloadStatus
 from sentinelsat.cscgs_downloader import LtaDownloader
 
 from sentinelsat.exceptions import (
-    InvalidChecksumError,
-    LTAError,
-    LTATriggered,
-    SentinelAPIError,
-    ServerError,
-    UnauthorizedError,
-    QueryLengthError,
-    InvalidKeyError,
+    ServerError
 )
 
 
 class LtaAPI(SentinelAPI):
+    logger = logging.getLogger("sentinelsat.LtaAPI")
     def __init__(
         self,
         user,
@@ -60,13 +53,13 @@ class LtaAPI(SentinelAPI):
         trigger_offline=True,
         wait_for_reload=True,
         directory_path=".",
-        checksum=True,
+        checksum=False,
         nodefilter=None,
     ):
         """Download a product.
 
-        Uses the filename on the server for the downloaded file, e.g.
-        "S1A_EW_GRDH_1SDH_20141003T003840_20141003T003920_002658_002F54_4DD1.zip".
+        Uses the UUID on the server for the downloaded file, e.g.
+        "173c2e04-6e06-30c1-a364-011e68bc4fad".
 
         Incomplete downloads are continued and complete files are skipped.
 
@@ -108,7 +101,7 @@ class LtaAPI(SentinelAPI):
         self,
         products,
         directory_path=".",
-        max_attempts=10,
+        max_attempts: int = 10,
         checksum=False,
         n_concurrent_dl=None,
         lta_retry_delay=None,
@@ -239,10 +232,8 @@ class LtaAPI(SentinelAPI):
     # Single product methods
     #
 
-    def inspect_product(self, id, full=False):
-        url = self._get_products_url(id, "?$format=json")
-        if full:
-            url += "&$expand=Attributes"
+    def inspect_product(self, id):
+        url = self._get_products_url(id)
         with self.dl_limit_semaphore:
             response = self.session.get(url)
         self._check_cscgs_response(response)
@@ -298,7 +289,6 @@ class LtaAPI(SentinelAPI):
         }
         bulk_create_uri = "{}odata/v1/Bulks".format(self.api_url)
         self.logger.debug("bulk_create_body: {}".format(bulk_create_body))
-        self.logger.debug("bulk_create_uri: {}".format(batch_size_volume))
 
         with self.dl_limit_semaphore:
             response = self.session.post(bulk_create_uri, data=json.dumps(bulk_create_body))
@@ -385,17 +375,13 @@ class LtaAPI(SentinelAPI):
             if not self.batch_order_completed(batch_id):
                 self.batch_order_trigger(batch_id)
                 self.batch_order_wait_completed(batch_id)
-            self.logger.info("Start sequential download of batch: {}".format(batch_id))
-            self.downloader.download_all(batch_id)
+            self.downloader.download_all(batch_id=batch_id)
 
     def batch_order_products_download(
         self,
         batch_id: str,
-        retry_interval=0,
-        retry_max_number=0,
         directory=".",
         *,
-        stop_event=None,
         checksum=False,
         nodefilter=None
     ):

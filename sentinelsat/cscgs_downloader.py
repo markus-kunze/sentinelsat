@@ -77,6 +77,7 @@ class LtaDownloader(Downloader):
                 tmp_products.append(products)
         elif products is None and batch_id is None:
             raise ValueError("Either products or batch_id must be provided")
+
         if len(products) == 0:
             return ResultTuple({}, {}, {})
         self.logger.info(
@@ -236,6 +237,7 @@ class LtaDownloader(Downloader):
         for pid in self._tqdm(
             iterable=products, desc="Fetching archival status", unit="product", delay=2
         ):
+            # self.logger.debug("_init_statuses: {}".format(pid))
             assert isinstance(pid, dict)
             product_infos[pid["Id"]] = pid
             product_infos[pid["Id"]]["downloaded_bytes"] = 0
@@ -244,6 +246,7 @@ class LtaDownloader(Downloader):
 
             if batch_id is None:
                 product_infos[pid["Id"]]["url"] = self.api._get_products_url(pid["Id"], "/$value")
+                product_infos[pid["Id"]]["batch_product"] = False
                 if product_infos[pid["Id"]]["Online"]:
                     statuses[pid["Id"]] = DownloadStatus.ONLINE
                     online_prods.add(pid["Id"])
@@ -251,6 +254,7 @@ class LtaDownloader(Downloader):
                     statuses[pid["Id"]] = DownloadStatus.OFFLINE
                     offline_prods.add(pid["Id"])
             else:
+                product_infos[pid["Id"]]["batch_product"] = True
                 product_infos[pid["Id"]]["url"] = "{}odata/v1/BatchOrder({})/Products({})/$value".format(self.api.api_url, batch_id, pid["Id"])
                 statuses[pid["Id"]] = DownloadStatus.ONLINE
                 online_prods.add(pid["Id"])
@@ -299,6 +303,8 @@ class LtaDownloader(Downloader):
         if self.node_filter:
             return self._download_with_node_filter(id, directory, stop_event)
 
+        # self.logger.debug("download, product_info: {}".format(product_info))
+
         if product_info is None:
             product_info = self.api.inspect_product(id)
             product_info["url"] = self.api._get_products_url(product_info["Id"], "/$value")
@@ -310,26 +316,30 @@ class LtaDownloader(Downloader):
         product_info["size"] = product_info["ContentLength"]
         if "Checksum" in product_info:
             product_info[product_info["Checksum"][0]["Algorithm"].lower()] = product_info["Checksum"][0]["Value"]
+        if "batch_product" not in product_info:
+            product_info["batch_product"] = False
 
         if path.exists():
             # We assume that the product has been downloaded and is complete
             return product_info
 
         # An incomplete download triggers the retrieval from the LTA if the product is not online
-        if not product_info["Online"]:
+        if product_info["batch_product"]:
+            self._download_common(product_info, path, stop_event)
+        elif product_info["Online"]:
+            self._download_common(product_info, path, stop_event)
+        elif not product_info["Online"]:
             if trigger_offline:
                 self.logger.debug("Product {} is offline. Start triggering reload.".format(id))
                 self.trigger_offline_retrieval(id)
             if wait_for_reload:
                 self.logger.debug("Product {} is offline. Wait for it to be available.".format(id))
-                if not self.wait_for_cscgs_offline_retrieval(id, stop_event):
+                if not self.wait_for_cscgs_offline_retrieval(id):
                     raise LTATriggered(id)
                 self._download_common(product_info, path, stop_event)
             if not trigger_offline and not wait_for_reload:
                 raise ValueError("Product is offline and needs to be reloaded. Please set trigger_offline and "
                                  "wait_for_reload to True to start offline retrieval.")
-        elif product_info["Online"]:
-            self._download_common(product_info, path, stop_event)
 
         return product_info
 
